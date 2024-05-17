@@ -14,6 +14,9 @@
 		{
 			"type": "shell",
 			"label": "NVCC Run",
+			"windows": {
+				"command": "chcp 65001 && nvcc"
+			},
 			"command": "nvcc",
 			"args": [
 				"-lineinfo",
@@ -42,6 +45,9 @@
 		{
 			"type": "shell",
 			"label": "Nsight Compute",
+			"windows": {
+				"command": "ncu"
+			},
 			"command": "ncu",
 			"args": [
 				"--set",
@@ -79,7 +85,10 @@
 				"group": "cmake"
 			},
 			"group": {
-				"kind": "none",
+				// 任务分组，因为是tasks而不是task，意味着可以连着执行很多任务
+                // 在build组的任务们，可以通过在Command Palette(F1) 输入run build task来运行
+                // 当然，如果任务分组是test，你就可以用run test task来运行 
+				"kind": "build",
 				"isDefault": true
 			},
 			"detail": "compiler: cmake build"
@@ -87,6 +96,9 @@
 		{
 			"type": "shell",
 			"label": "Run Build File",
+			"windows": {
+				"command": "chcp 65001 && ${workspaceFolder}/dist/${fileBasenameNoExtension}"
+			},
 			"command": "${workspaceFolder}/dist/${fileBasenameNoExtension}",
 			"args": [],
 			"options": {
