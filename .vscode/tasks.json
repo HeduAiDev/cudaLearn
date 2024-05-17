@@ -1,0 +1,104 @@
+{
+	"version": "2.0.0",
+	"windows": {
+		"options": {
+			"shell": {
+				"executable": "cmd.exe",
+				"args": [
+					"/d", "/c"
+				]
+			}
+		}
+	},
+	"tasks": [
+		{
+			"type": "shell",
+			"label": "NVCC Run",
+			"command": "nvcc",
+			"args": [
+				"-lineinfo",
+				"${file}",
+				"-o",
+				".//dist//${fileBasenameNoExtension}",
+				"-I3rd//cutlass",
+				"-std=c++17",
+				"--expt-relaxed-constexpr",
+				"-run"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"clear": false,
+				"panel": "dedicated",
+			},
+			"group": {
+				"kind": "none",
+				"isDefault": true
+			},
+			"detail": "compiler: nvcc"
+		},
+		{
+			"type": "shell",
+			"label": "Nsight Compute",
+			"command": "ncu",
+			"args": [
+				"--set",
+				"full",
+				"--open-in-ui",
+				"-k",
+				"\"regex:^(?!check|test|valid).*\"", //过滤掉用来验证结果的kernel
+				"--target-processes",
+				"all",
+				".//dist//${fileBasenameNoExtension}",
+			],
+			"options": {
+				"cwd": "${fileDirname}"
+			},
+			"presentation": {
+				"echo": true,
+
+			},
+			"group": {
+				"kind": "none",
+				"isDefault": true
+			}
+		},
+		{
+			"type": "shell",
+			"label": "CMake Build ALL",
+			"command": "cmake -S . -B build && cmake --build build",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"clear": true,
+				"panel": "dedicated",
+				"group": "cmake"
+			},
+			"group": {
+				"kind": "none",
+				"isDefault": true
+			},
+			"detail": "compiler: cmake build"
+		},
+		{
+			"type": "shell",
+			"label": "Run Build File",
+			"command": "${workspaceFolder}/dist/${fileBasenameNoExtension}",
+			"args": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"clear": false,
+				"panel": "dedicated",
+				"group": "cmake"
+			},
+			"detail": "compiler: cmake build"
+		},
+	]
+}
