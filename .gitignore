@@ -1,4 +1,4 @@
 test/
-dist/
-build/
+dist/*
+build/*
 CUDATutorial/
