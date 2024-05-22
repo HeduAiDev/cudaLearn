@@ -8,9 +8,9 @@ if(CMAKE_CUDA_COMPILER)
 endif()
 
 add_subdirectory(3rd)
+set(CMAKE_CUDA_ARCHITECTURES 75)
 
-
-file(GLOB TEST_SOURCES "*.cu")
+file(GLOB TEST_SOURCES "*.cu" "test/*.cu")
 foreach(TEST_SOURCE ${TEST_SOURCES})
     # 获取文件名
     get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
@@ -18,6 +18,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     # 添加可执行文件
     add_executable(${TEST_NAME} ${TEST_SOURCE})
     target_link_libraries(${TEST_NAME} PUBLIC cutlass)
+    target_link_libraries(${TEST_NAME} PUBLIC cublas)
 
     # target_compile_options(gelu PRIVATE --run)
     target_compile_options(${TEST_NAME} PRIVATE -lineinfo)

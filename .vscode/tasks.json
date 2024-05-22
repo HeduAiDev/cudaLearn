@@ -19,13 +19,15 @@
 			},
 			"command": "nvcc",
 			"args": [
+				"-arch=sm_75",
 				"-lineinfo",
 				"${file}",
 				"-o",
 				".//dist//${fileBasenameNoExtension}",
-				"-I3rd//cutlass",
+				"-I3rd//cutlass//include",
 				"-std=c++17",
 				"--expt-relaxed-constexpr",
+				"-lcublas",
 				"-run"
 			],
 			"options": {
@@ -40,7 +42,7 @@
 				"kind": "none",
 				"isDefault": true
 			},
-			"detail": "compiler: nvcc"
+			"detail": "单文件（当前正在编辑的文件）编译并运行"
 		},
 		{
 			"type": "shell",
@@ -69,7 +71,8 @@
 			"group": {
 				"kind": "none",
 				"isDefault": true
-			}
+			},
+			"detail": "使用Nsight Compute cli（ncu）调试当前文件并在Nsight Compute UI打开报告"
 		},
 		{
 			"type": "shell",
@@ -91,7 +94,7 @@
 				"kind": "build",
 				"isDefault": true
 			},
-			"detail": "compiler: cmake build"
+			"detail": "使用cmake编译整个项目"
 		},
 		{
 			"type": "shell",
@@ -110,7 +113,7 @@
 				"panel": "dedicated",
 				"group": "cmake"
 			},
-			"detail": "compiler: cmake build"
+			"detail": "执行当前正在编辑的文件"
 		},
 	]
 }
