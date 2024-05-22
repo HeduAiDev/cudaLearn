@@ -2,3 +2,6 @@ test/
 dist/*
 build/*
 CUDATutorial/
+
+dist/.gitkeep
+build/.gitkeep
