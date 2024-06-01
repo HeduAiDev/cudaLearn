@@ -5,12 +5,12 @@
 
 using namespace cute;
 
-#define M 65536 
-#define N 1024
+#define M 1024
+#define N 65536
 #define K 1024
 
-#define TileM 64
-#define TileN 64
+#define TileM 128
+#define TileN 128
 #define TileK 8
 
 #define KTileM  (((M) + (TileM - 1))/TileM)
@@ -329,13 +329,13 @@ __global__ void tile_smem_float4_tile_reg_kernel(half * __restrict__ a, half * _
     #define elements_b 1
     #endif
     // REG
-    #if (REGN == 8)
+    #if (REGN % 8 == 0)
     using ArrT_c = float4;
     #define elements_c 8
-    #elif (REGN == 4)
+    #elif (REGN % 4 == 0)
     using ArrT_c = float2;
     #define elements_c 4
-    #elif (REGN == 2)
+    #elif (REGN % 2 == 0)
     using ArrT_c = float;
     #define elements_c 2
     #else
@@ -369,8 +369,10 @@ __global__ void tile_smem_float4_tile_reg_kernel(half * __restrict__ a, half * _
             for(int j = 0; j < REGM; j++)    
             {
                 fragA[j] = sA[threadIdx.x * REGM + j][i];
-            }
-            reinterpret_cast<ArrT_c*>(fragB)[0] = reinterpret_cast<ArrT_c*>(&sB[i][threadIdx.y * REGN])[0];
+            } 
+            #pragma unroll
+            for (int j = 0; j < REGN / elements_c; j++)
+                reinterpret_cast<ArrT_c *>(fragB)[j] = reinterpret_cast<ArrT_c *>(&sB[i][threadIdx.y * REGN])[j];
             #pragma unroll
             for (int y = 0; y < REGM; y++) {
                 for (int x = 0; x < REGN; x++)
@@ -384,10 +386,14 @@ __global__ void tile_smem_float4_tile_reg_kernel(half * __restrict__ a, half * _
     #pragma unroll
     for(int y = 0; y < REGM; y++) 
     {
-        #if (REGN == 4 && N % REGN == 0)
-        reinterpret_cast<float2*>(&c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN])[0] = reinterpret_cast<float2*>(&fragC[y][0])[0];
-        #elif (REGN == 8 && N % REGN == 0)
-        reinterpret_cast<float4*>(&c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN])[0] = reinterpret_cast<float4*>(&fragC[y][0])[0];
+        #if (REGN % 8 == 0 && N % REGN == 0)
+        #pragma unroll
+        for (int x = 0; x < REGN / 8; x++)
+            reinterpret_cast<float4 *>(&c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN])[x] = reinterpret_cast<float4 *>(&fragC[y][0])[x];
+        #elif (REGN % 4 == 0 && N % REGN == 0)
+        #pragma unroll
+        for (int x = 0; x < REGN / 4; x++)
+            reinterpret_cast<float2 *>(&c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN])[x] = reinterpret_cast<float2 *>(&fragC[y][0])[x];
         #else
         #pragma unroll
         for(int x = 0; x < REGN && blockIdx.x * TileM + threadIdx.x * REGM + y < M && blockIdx.y * TileN + threadIdx.y * REGN + x < N; x++)
@@ -438,26 +444,26 @@ __global__ void tile_smem_float4_tile_reg_BT_kernel(half * __restrict__ a, half 
     #define elements_b 1
     #endif
     // REG
-    #if (REGN == 8)
+    #if (REGN % 8 == 0)
     using ArrT_cn = float4;
     #define elements_cn 8
-    #elif (REGN == 4)
+    #elif (REGN % 4 == 0)
     using ArrT_cn = float2;
     #define elements_cn 4
-    #elif (REGN == 2)
+    #elif (REGN % 2 == 0)
     using ArrT_cn = float;
     #define elements_cn 2
     #else
     using ArrT_cn = half;
     #define elements_cn 1
     #endif
-    #if (REGM == 8)
+    #if (REGM % 8 == 0)
     using ArrT_cm = float4;
     #define elements_cm 8
-    #elif (REGM == 4)
+    #elif (REGM % 4 == 0)
     using ArrT_cm = float2;
     #define elements_cm 4
-    #elif (REGM == 2)
+    #elif (REGM % 2 == 0)
     using ArrT_cm = float;
     #define elements_cm 2
     #else
@@ -494,13 +500,24 @@ __global__ void tile_smem_float4_tile_reg_BT_kernel(half * __restrict__ a, half 
         #pragma unroll
         for (int i = 0; i < min(k - tki * TileK, TileK); i++)
         {
-            reinterpret_cast<ArrT_cm*>(fragA)[0] = reinterpret_cast<ArrT_cm*>(&sA[i][threadIdx.x * REGM])[0];
-            reinterpret_cast<ArrT_cn*>(fragB)[0] = reinterpret_cast<ArrT_cn*>(&sB[i][threadIdx.y * REGN])[0];
+            #pragma unroll
+            for (int j = 0; j < REGM / elements_cm; j++)
+                reinterpret_cast<ArrT_cm *>(fragA)[j] = reinterpret_cast<ArrT_cm *>(&sA[i][threadIdx.x * REGM])[j];
+            #pragma unroll
+            for (int j = 0; j < REGN / elements_cn; j++)
+                reinterpret_cast<ArrT_cn *>(fragB)[j] = reinterpret_cast<ArrT_cn *>(&sB[i][threadIdx.y * REGN])[j];
+            // #pragma unroll
+            // for (int y = 0; y < REGM; y++) {
+            //     for (int x = 0; x < REGN; x++)
+            //     {
+            //         fragC[y][x] += fragA[y] * fragB[x];
+            //     }
+            // }
             #pragma unroll
             for (int y = 0; y < REGM; y++) {
-                for (int x = 0; x < REGN; x++)
+                for (int x = 0; x < REGN / 2; x++)
                 {
-                    fragC[y][x] += fragA[y] * fragB[x];
+                    reinterpret_cast<__half2*>(fragC[y])[x] = __hfma2(__half2half2(fragA[y]) ,reinterpret_cast<__half2*>(fragB)[x], reinterpret_cast<__half2*>(fragC[y])[x]);
                 }
             }
         }
@@ -509,10 +526,14 @@ __global__ void tile_smem_float4_tile_reg_BT_kernel(half * __restrict__ a, half 
     #pragma unroll
     for(int y = 0; y < REGM; y++) 
     {
-        #if (REGN == 4 && N % REGN == 0)
-        reinterpret_cast<float2*>(&c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN])[0] = reinterpret_cast<float2*>(&fragC[y][0])[0];
-        #elif (REGN == 8 && N % REGN == 0)
-        reinterpret_cast<float4*>(&c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN])[0] = reinterpret_cast<float4*>(&fragC[y][0])[0];
+        #if (REGN % 8 == 0 && N % REGN == 0)
+        #pragma unroll
+        for (int x = 0; x < REGN / 8; x++)
+            reinterpret_cast<float4 *>(&c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN])[x] = reinterpret_cast<float4 *>(&fragC[y][0])[x];
+        #elif (REGN % 4 == 0 && N % REGN == 0)
+        #pragma unroll
+        for (int x = 0; x < REGN / 4; x++)
+            reinterpret_cast<float2 *>(&c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN])[x] = reinterpret_cast<float2 *>(&fragC[y][0])[x];
         #else
         #pragma unroll
         for(int x = 0; x < REGN && blockIdx.x * TileM + threadIdx.x * REGM + y < M && blockIdx.y * TileN + threadIdx.y * REGN + x < N; x++)
@@ -640,11 +661,7 @@ int main() {
         dim3 grid(KTileM, KTileN);
         dim3 block(TileM, TileN);
         t.start();
-        // #if (N % 8 == 0 && K % 8 == 0 && TileK % 8 ==0 && TileN % 8 == 0)
         tile_smem_float4_kernel<<<grid, block>>>(d_a, d_b, d_c, M, N, K);
-        // #else
-        // tile_smem_float4_v2_kernel<<<grid, block>>>(d_a, d_b, d_c, M, N, K);
-        // #endif
         t.stop();
         CHECK(cudaGetLastError());
         CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(half), cudaMemcpyDeviceToHost));
@@ -695,7 +712,6 @@ int main() {
     // print_matrix(h_c, M, N, "C");
     // print_matrix(ground_truth, M, N, "ground_truth");
 
-    CHECK(cudaGetLastError());
     cudaFree(d_a);
     cudaFree(d_b);
     cudaFree(d_c);
