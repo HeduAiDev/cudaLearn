@@ -5,20 +5,12 @@
 
 using namespace cute;
 
-#define M 1024
-#define N 65536
+#define M 2048
+#define N 2048
 #define K 1024
 
-#define TileM 128
-#define TileN 128
-#define TileK 8
-
-#define KTileM  (((M) + (TileM - 1))/TileM)
-#define KTileK  (((K) + (TileK - 1))/TileK) 
-#define KTileN  (((N) + (TileN - 1))/TileN)
-
-#define REGM 8
-#define REGN 8
+// half | float
+using dtype = float;
 
 
 #define CHECK(call)\
@@ -31,6 +23,31 @@ using namespace cute;
       throw std::exception("cuda error");\
   }\
 }
+
+template<typename T,int MatrixSize, int TileSize >
+struct ArrT {
+    using TYPE = std::conditional_t<
+        (TileSize % (sizeof(float4) / sizeof(T)) == 0 && MatrixSize % TileSize == 0),
+        float4,
+        std::conditional_t<
+            (TileSize % (sizeof(float2) / sizeof(T)) == 0 && MatrixSize % TileSize == 0),
+            float2,
+            std::conditional_t<
+                (TileSize % (sizeof(float) / sizeof(T)) == 0 && MatrixSize % TileSize == 0),
+                float,
+                T>>>;
+    static constexpr int ELEMENTS = []
+    {
+        if constexpr (TileSize % (sizeof(float4)/sizeof(T)) == 0 && MatrixSize % TileSize == 0)
+            return (sizeof(float4)/sizeof(T));
+        else if constexpr (TileSize % (sizeof(float2)/sizeof(T)) == 0 && MatrixSize % TileSize == 0)
+            return (sizeof(float2)/sizeof(T));
+        else if constexpr (TileSize % (sizeof(float)/sizeof(T)) == 0 && MatrixSize % TileSize == 0)
+            return (sizeof(float)/sizeof(T));
+        else
+            return 1;
+    }();
+};
 
 
 template<class T>
@@ -101,7 +118,7 @@ struct Timeit {
     }
     __inline__ float get_FLOPS()
     {
-       return ((float)M * N * K * 2) / (elapsed_time) / 1e6;
+       return ((float)M * N * K * 2) / (elapsed_time) / 1e3;
     }
 };
 
@@ -110,7 +127,7 @@ __global__ void check_kernel(T1 *a, T2 *b, bool* flg, unsigned int n) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     for(int i = tid; i < n; i += blockDim.x * gridDim.x) {
         if(abs((float) (a[i] - b[i]) > 1e-6)) {
-            // printf("a[%d] = %.10f, b[%d] = %.10f\n", i, __half2float(a[i]), i, __half2float(b[i]));
+            printf("a[%d] = %.10f, b[%d] = %.10f\n", i, __half2float(a[i]), i, __half2float(b[i]));
             *flg = false;
         }
         if (*flg == false) return;
@@ -154,7 +171,8 @@ void matrix_cpu(T *a, T *b, T *c, int m, int n, int k)
         }
 }
 
-__global__ void gmem_kernel(half *a, half *b, half *c, int m, int n, int k)
+template<typename T = half, int _TileM, int _TileN, int _TileK, int _KTileM, int _KTileN, int _KTileK>
+__global__ void gmem_kernel(T *a, T *b, T *c, int m, int n, int k)
 {
     int total_threads = gridDim.x * blockDim.x;
     #pragma unroll
@@ -163,7 +181,7 @@ __global__ void gmem_kernel(half *a, half *b, half *c, int m, int n, int k)
         #pragma unroll
         for (int col = blockIdx.y * blockDim.y + threadIdx.y; col < n; col += total_threads) 
         {
-            half sum = 0;
+            T sum = 0;
             for (int i = 0; i <k; i++)
             {
                 sum += a[row * k + i] * b[i * n + col];
@@ -174,41 +192,43 @@ __global__ void gmem_kernel(half *a, half *b, half *c, int m, int n, int k)
 }
 
 // TileM,TileN
-__global__ void tile_smem_kernel(half *a, half *b, half *c, int m, int n, int k)
+template<typename T = half, int _TileM, int _TileN, int _TileK, int _KTileM, int _KTileN, int _KTileK>
+__global__ void tile_smem_kernel(T *a, T *b, T *c, const int m, const int n, const int k)
 {
-    __shared__ half sA[TileM][TileK];
-    __shared__ half sB[TileK][TileN];
-    int row = blockIdx.x * TileM + threadIdx.x;
-    int col = blockIdx.y * TileN + threadIdx.y;
+    __shared__ T sA[_TileM][_TileK];
+    __shared__ T sB[_TileK][_TileN];
+    int row = blockIdx.x * _TileM + threadIdx.x;
+    int col = blockIdx.y * _TileN + threadIdx.y;
     int tid = threadIdx.x + threadIdx.y * blockDim.x;
     int total_threads = blockDim.x * blockDim.y;
-    half sum = 0;
+    T sum = 0;
 
     #pragma unroll
-    for (int tki = 0; tki < KTileK; tki++)
+    for (int tki = 0; tki < _KTileK; tki++)
     {
         #pragma unroll
-        for(int i = tid; i < TileM * TileK; i += total_threads)        
+        for(int i = tid; i < _TileM * _TileK; i += total_threads)        
         {
-            int y = i % TileM;
-            int x = i / TileM;
-            sA[y][x] = a[(blockIdx.x * TileM + y) * k + tki * TileK + x];
+            int y = i % _TileM;
+            int x = i / _TileM;
+            sA[y][x] = a[(blockIdx.x * _TileM + y) * k + tki * _TileK + x];
         }
         #pragma unroll
-        for(int i = tid; i < TileK * TileN; i += total_threads)        
+        for(int i = tid; i < _TileK * _TileN; i += total_threads)        
         {
-            int y = i % TileK;
-            int x = i / TileK;
-            sB[y][x] = b[(tki * TileK + y) * n + blockIdx.y * TileN + x];
+            int y = i % _TileK;
+            int x = i / _TileK;
+            sB[y][x] = b[(tki * _TileK + y) * n + blockIdx.y * _TileN + x];
         }
         __syncthreads();
 
-        // 支持任意形状的 TileK
+        // 支持任意形状的 _TileK
         #pragma unroll
-        for (int i = 0; i < min(k - tki * TileK, TileK); i++)
+        for (int i = 0; i < min(k - tki * _TileK, _TileK); i++)
         {
             sum += sA[threadIdx.x][i] * sB[i][threadIdx.y];
         }
+        __syncthreads();
     }
     if (row < m && col < n)
     {
@@ -217,70 +237,50 @@ __global__ void tile_smem_kernel(half *a, half *b, half *c, int m, int n, int k)
 }
 
 // TileM, TileN
-__global__ void tile_smem_float4_kernel(half *a, half *b, half *c, int m, int n, int k)
+template<typename T = half, int _TileM, int _TileN, int _TileK, int _KTileM, int _KTileN, int _KTileK>
+__global__ void tile_smem_float4_kernel(T *a, T *b, T *c, int m, int n, int k)
 {
-    __shared__ half sA[TileM][TileK];
-    __shared__ half sB[TileK][TileN];
-    int row = blockIdx.x * TileM + threadIdx.x;
-    int col = blockIdx.y * TileN + threadIdx.y;
+    __shared__ T sA[_TileM][_TileK];
+    __shared__ T sB[_TileK][_TileN];
+    int row = blockIdx.x * _TileM + threadIdx.x;
+    int col = blockIdx.y * _TileN + threadIdx.y;
     int tid = threadIdx.x + threadIdx.y * blockDim.x;
     int total_threads = blockDim.x * blockDim.y;
-    half sum = 0;
+    T sum = 0;
 
     // sA
-    #if (TileK % 8 == 0 && K % TileK == 0)
-    using ArrT_a = float4;
-    #define elements_a 8
-    #elif (TileK % 4 == 0 && K % TileK == 0)
-    using ArrT_a = float2;
-    #define elements_a 4
-    #elif (TileK % 2 == 0 && K % TileK == 0)
-    using ArrT_a = float;
-    #define elements_a 2
-    #else
-    using ArrT_a = half;
-    #define elements_a 1
-    #endif
+    using ArrT_a = typename ArrT<T, K, _TileK>::TYPE;
+    constexpr int elements_a = ArrT<T, K, _TileK>::ELEMENTS;
     // sB
-    #if (TileN % 8 == 0 && N % TileN == 0)
-    using ArrT_b = float4;
-    #define elements_b 8
-    #elif (TileN % 4 == 0 && N % TileN == 0)
-    using ArrT_b = float2;
-    #define elements_b 4
-    #elif (TileN % 2 == 0 && N % TileN == 0)
-    using ArrT_b = float;
-    #define elements_b 2
-    #else
-    using ArrT_b = half;
-    #define elements_b 1
-    #endif
+    using ArrT_b = typename ArrT<T, N, _TileN>::TYPE;
+    constexpr int elements_b = ArrT<T, N, _TileN>::ELEMENTS;
    
     #pragma unroll
-    for (int tki = 0; tki < KTileK; tki++)
+    for (int tki = 0; tki < _KTileK; tki++)
     {
         #pragma unroll
-        for(int i = tid; i < TileM * TileK / elements_a; i += total_threads)        
+        for(int i = tid; i < _TileM * _TileK / elements_a; i += total_threads)        
         {
-            int y = i % TileM;
-            int x = i / TileM;
-            reinterpret_cast<ArrT_a*>(&sA[y][x * elements_a])[0] = reinterpret_cast<ArrT_a*>(&a[(blockIdx.x * TileM + y) * k + tki * TileK + x * elements_a])[0];
+            int y = i % _TileM;
+            int x = i / _TileM;
+            reinterpret_cast<ArrT_a*>(&sA[y][x * elements_a])[0] = reinterpret_cast<ArrT_a*>(&a[(blockIdx.x * _TileM + y) * k + tki * _TileK + x * elements_a])[0];
         }
         #pragma unroll
-        for(int i = tid; i < TileK * TileN / elements_b; i += total_threads)        
+        for(int i = tid; i < _TileK * _TileN / elements_b; i += total_threads)        
         {
-            int y = i % TileK;
-            int x = i / TileK;
-            reinterpret_cast<ArrT_b*>(&sB[y][x * elements_b])[0] = reinterpret_cast<ArrT_b*>(&b[(tki * TileK + y) * n + blockIdx.y * TileN + x * elements_b])[0];
+            int y = i % _TileK;
+            int x = i / _TileK;
+            reinterpret_cast<ArrT_b*>(&sB[y][x * elements_b])[0] = reinterpret_cast<ArrT_b*>(&b[(tki * _TileK + y) * n + blockIdx.y * _TileN + x * elements_b])[0];
         }
         __syncthreads();
 
         // 允许k 不能被 TileK整除
         #pragma unroll
-        for (int i = 0; i < min(k - tki * TileK, TileK); i++)
+        for (int i = 0; i < min(k - tki * _TileK, _TileK); i++)
         {
             sum += sA[threadIdx.x][i] * sB[i][threadIdx.y];
         }
+        __syncthreads();
     }
     if (row < m && col < n)
     {
@@ -290,196 +290,145 @@ __global__ void tile_smem_float4_kernel(half *a, half *b, half *c, int m, int n,
 
 
 // TileM/REGM, TileN/REGN
-__global__ void tile_smem_float4_tile_reg_kernel(half * __restrict__ a, half * __restrict__ b, half * __restrict__ c, int m, int n, int k)
+template<typename T = half, int _TileM, int _TileN, int _TileK, int _KTileM, int _KTileN, int _KTileK, int _REGM, int _REGN>
+__global__ void tile_smem_float4_tile_reg_kernel(T * __restrict__ a, T * __restrict__ b, T * __restrict__ c, int m, int n, int k)
 {
-    __shared__ half sA[TileM][TileK];
-    __shared__ half sB[TileK][TileN];
+    __shared__ T sA[_TileM][_TileK];
+    __shared__ T sB[_TileK][_TileN];
     int tid = threadIdx.x + threadIdx.y * blockDim.x;
     int total_threads = blockDim.x * blockDim.y;
-    half fragA[REGM];
-    half fragB[REGN];
-    half fragC[REGM][REGN] = {0};
-    if (threadIdx.x >= TileM/REGM || threadIdx.y >= TileN/REGN) return;
+    T fragA[_REGM];
+    T fragB[_REGN];
+    T fragC[_REGM][_REGN] = {0};
+    if (threadIdx.x >= _TileM/_REGM || threadIdx.y >= _TileN/_REGN) return;
+
     // sA
-    #if (TileK % 8 == 0 && K % TileK == 0)
-    using ArrT_a = float4;
-    #define elements_a 8
-    #elif (TileK % 4 == 0 && K % TileK == 0)
-    using ArrT_a = float2;
-    #define elements_a 4
-    #elif (TileK % 2 == 0 && K % TileK == 0)
-    using ArrT_a = float;
-    #define elements_a 2
-    #else
-    using ArrT_a = half;
-    #define elements_a 1
-    #endif
+    using ArrT_a = typename ArrT<T, K, _TileK>::TYPE;
+    constexpr int elements_a = ArrT<T, K, _TileK>::ELEMENTS;
     // sB
-    #if (TileN % 8 == 0 && N % TileN == 0)
-    using ArrT_b = float4;
-    #define elements_b 8
-    #elif (TileN % 4 == 0 && N % TileN == 0)
-    using ArrT_b = float2;
-    #define elements_b 4
-    #elif (TileN % 2 == 0 && N % TileN == 0)
-    using ArrT_b = float;
-    #define elements_b 2
-    #else
-    using ArrT_b = half;
-    #define elements_b 1
-    #endif
+    using ArrT_b = typename ArrT<T, N, _TileN>::TYPE;
+    constexpr int elements_b = ArrT<T, N, _TileN>::ELEMENTS;
     // REG
-    #if (REGN % 8 == 0)
-    using ArrT_c = float4;
-    #define elements_c 8
-    #elif (REGN % 4 == 0)
-    using ArrT_c = float2;
-    #define elements_c 4
-    #elif (REGN % 2 == 0)
-    using ArrT_c = float;
-    #define elements_c 2
-    #else
-    using ArrT_c = half;
-    #define elements_c 1
-    #endif
+    using ArrT_c = typename ArrT<T, _REGN, _REGN>::TYPE;
+    constexpr int elements_c = ArrT<T, _REGN, _REGN>::ELEMENTS;
+
     #pragma unroll
-    for (int tki = 0; tki < KTileK; tki++)
+    for (int tki = 0; tki < _KTileK; tki++)
     {
         #pragma unroll
-        for(int i = tid; i < TileM * TileK / elements_a; i += total_threads)        
+        for(int i = tid; i < _TileM * _TileK / elements_a; i += total_threads)        
         {
-            int y = i % TileM;
-            int x = i / TileM;
-            reinterpret_cast<ArrT_a*>(&sA[y][x * elements_a])[0] = reinterpret_cast<ArrT_a*>(&a[(blockIdx.x * TileM + y) * k + tki * TileK + x * elements_a])[0];
+            int y = i % _TileM;
+            int x = i / _TileM;
+            reinterpret_cast<ArrT_a*>(&sA[y][x * elements_a])[0] = reinterpret_cast<ArrT_a*>(&a[(blockIdx.x * _TileM + y) * k + tki * _TileK + x * elements_a])[0];
         }
         #pragma unroll
-        for(int i = tid; i < TileK * TileN / elements_b; i += total_threads)        
+        for(int i = tid; i < _TileK * _TileN / elements_b; i += total_threads)        
         {
-            int y = i % TileK;
-            int x = i / TileK;
-            reinterpret_cast<ArrT_b*>(&sB[y][x * elements_b])[0] = reinterpret_cast<ArrT_b*>(&b[(tki * TileK + y) * n + blockIdx.y * TileN + x * elements_b])[0];
+            int y = i % _TileK;
+            int x = i / _TileK;
+            reinterpret_cast<ArrT_b*>(&sB[y][x * elements_b])[0] = reinterpret_cast<ArrT_b*>(&b[(tki * _TileK + y) * n + blockIdx.y * _TileN + x * elements_b])[0];
         }
         __syncthreads();
 
-        // 允许k 不能被 TileK整除
+        // 允许k 不能被 _TileK整除
         #pragma unroll
-        for (int i = 0; i < min(k - tki * TileK, TileK); i++)
+        for (int i = 0; i < min(k - tki * _TileK, _TileK); i++)
         {
             #pragma unroll
-            for(int j = 0; j < REGM; j++)    
+            for(int j = 0; j < _REGM; j++)    
             {
-                fragA[j] = sA[threadIdx.x * REGM + j][i];
+                fragA[j] = sA[threadIdx.x * _REGM + j][i];
             } 
             #pragma unroll
-            for (int j = 0; j < REGN / elements_c; j++)
-                reinterpret_cast<ArrT_c *>(fragB)[j] = reinterpret_cast<ArrT_c *>(&sB[i][threadIdx.y * REGN])[j];
-            #pragma unroll
-            for (int y = 0; y < REGM; y++) {
-                for (int x = 0; x < REGN; x++)
+            for (int j = 0; j < _REGN / elements_c; j++)
+                reinterpret_cast<ArrT_c *>(fragB)[j] = reinterpret_cast<ArrT_c *>(&sB[i][threadIdx.y * _REGN])[j];
+            if constexpr (!std::is_same<T, __half>::value)
+            {
+                #pragma unroll
+                for (int y = 0; y < _REGM; y++)
                 {
-                    fragC[y][x] += fragA[y] * fragB[x];
+                    for (int x = 0; x < _REGN; x++)
+                    {
+                        fragC[y][x] += fragA[y] * fragB[x];
+                    }
+                }
+            }
+            else
+            {
+                #pragma unroll
+                for (int y = 0; y < _REGM; y++)
+                {
+                    for (int x = 0; x < _REGN / 2; x++)
+                    {
+                        reinterpret_cast<__half2 *>(fragC[y])[x] = __hfma2(__half2half2(fragA[y]), reinterpret_cast<__half2 *>(fragB)[x], reinterpret_cast<__half2 *>(fragC[y])[x]);
+                    }
                 }
             }
         }
         __syncthreads();
     }
     #pragma unroll
-    for(int y = 0; y < REGM; y++) 
+    for(int y = 0; y < _REGM; y++) 
     {
-        #if (REGN % 8 == 0 && N % REGN == 0)
-        #pragma unroll
-        for (int x = 0; x < REGN / 8; x++)
-            reinterpret_cast<float4 *>(&c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN])[x] = reinterpret_cast<float4 *>(&fragC[y][0])[x];
-        #elif (REGN % 4 == 0 && N % REGN == 0)
-        #pragma unroll
-        for (int x = 0; x < REGN / 4; x++)
-            reinterpret_cast<float2 *>(&c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN])[x] = reinterpret_cast<float2 *>(&fragC[y][0])[x];
-        #else
-        #pragma unroll
-        for(int x = 0; x < REGN && blockIdx.x * TileM + threadIdx.x * REGM + y < M && blockIdx.y * TileN + threadIdx.y * REGN + x < N; x++)
+        if constexpr (_REGN % (sizeof(float4)/sizeof(T)) == 0 && N % _REGN == 0)
         {
-            c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN + x] = fragC[y][x];
+            #pragma unroll
+            for (int x = 0; x < _REGN / (sizeof(float4)/sizeof(T)); x++)
+                reinterpret_cast<float4 *>(&c[(blockIdx.x * _TileM + threadIdx.x * _REGM + y) * n + blockIdx.y * _TileN + threadIdx.y * _REGN])[x] = reinterpret_cast<float4 *>(&fragC[y][0])[x];
         }
-        #endif
+        else if constexpr (_REGN % (sizeof(float2)/sizeof(T)) == 0 && N % _REGN == 0)
+        {
+            #pragma unroll
+            for (int x = 0; x < _REGN / (sizeof(float2)/sizeof(T)); x++)
+                reinterpret_cast<float2 *>(&c[(blockIdx.x * _TileM + threadIdx.x * _REGM + y) * n + blockIdx.y * _TileN + threadIdx.y * _REGN])[x] = reinterpret_cast<float2 *>(&fragC[y][0])[x];
+        }
+        else
+        {
+            #pragma unroll
+            for (int x = 0; x < _REGN && blockIdx.x * _TileM + threadIdx.x * _REGM + y < M && blockIdx.y * _TileN + threadIdx.y * _REGN + x < N; x++)
+            {
+                c[(blockIdx.x * _TileM + threadIdx.x * _REGM + y) * n + blockIdx.y * _TileN + threadIdx.y * _REGN + x] = fragC[y][x];
+            }
+        }
     }
 }
 
 // TileM/REGM, TileN/REGN
-__global__ void tile_smem_float4_tile_reg_BT_kernel(half * __restrict__ a, half * __restrict__ b, half * __restrict__ c, int m, int n, int k)
+template<typename T = half, int _TileM, int _TileN, int _TileK, int _KTileM, int _KTileN, int _KTileK, int _REGM, int _REGN>
+__global__ void tile_smem_float4_tile_reg_BT_kernel(T * __restrict__ a, T * __restrict__ b, T * __restrict__ c, int m, int n, int k)
 {
-    __shared__ half sA[TileK][TileM];
-    __shared__ half sB[TileK][TileN];
+    __shared__ T sA[_TileK][_TileM];
+    __shared__ T sB[_TileK][_TileN];
     int tid = threadIdx.x + threadIdx.y * blockDim.x;
     int total_threads = blockDim.x * blockDim.y;
-    half fragA[REGM];
-    half fragB[REGN];
-    half fragC[REGM][REGN] = {0};
-    if (threadIdx.x >= TileM/REGM || threadIdx.y >= TileN/REGN) return;
+    T fragA[_REGM];
+    T fragB[_REGN];
+    T fragC[_REGM][_REGN] = {0};
+    if (threadIdx.x >= _TileM/_REGM || threadIdx.y >= _TileN/_REGN) return;
     // sA
-    #if (TileK % 8 == 0 && K % TileK == 0)
-    using ArrT_a = float4;
-    #define elements_a 8
-    #elif (TileK % 4 == 0 && K % TileK == 0)
-    using ArrT_a = float2;
-    #define elements_a 4
-    #elif (TileK % 2 == 0 && K % TileK == 0)
-    using ArrT_a = float;
-    #define elements_a 2
-    #else
-    using ArrT_a = half;
-    #define elements_a 1
-    #endif
+    using ArrT_a = typename ArrT<T, K, _TileK>::TYPE;
+    constexpr int elements_a = ArrT<T, K, _TileK>::ELEMENTS;
     // sB
-    #if (TileN % 8 == 0 && N % TileN == 0)
-    using ArrT_b = float4;
-    #define elements_b 8
-    #elif (TileN % 4 == 0 && N % TileN == 0)
-    using ArrT_b = float2;
-    #define elements_b 4
-    #elif (TileN % 2 == 0 && N % TileN == 0)
-    using ArrT_b = float;
-    #define elements_b 2
-    #else
-    using ArrT_b = half;
-    #define elements_b 1
-    #endif
-    // REG
-    #if (REGN % 8 == 0)
-    using ArrT_cn = float4;
-    #define elements_cn 8
-    #elif (REGN % 4 == 0)
-    using ArrT_cn = float2;
-    #define elements_cn 4
-    #elif (REGN % 2 == 0)
-    using ArrT_cn = float;
-    #define elements_cn 2
-    #else
-    using ArrT_cn = half;
-    #define elements_cn 1
-    #endif
-    #if (REGM % 8 == 0)
-    using ArrT_cm = float4;
-    #define elements_cm 8
-    #elif (REGM % 4 == 0)
-    using ArrT_cm = float2;
-    #define elements_cm 4
-    #elif (REGM % 2 == 0)
-    using ArrT_cm = float;
-    #define elements_cm 2
-    #else
-    using ArrT_cm = half;
-    #define elements_cm 1
-    #endif
+    using ArrT_b = typename ArrT<T, N, _TileN>::TYPE;
+    constexpr int elements_b = ArrT<T, N, _TileN>::ELEMENTS;
+    // _REGN
+    using ArrT_cn = typename ArrT<T, _REGN, _REGN>::TYPE;
+    constexpr int elements_cn = ArrT<T, _REGN, _REGN>::ELEMENTS;
+    // _REGM
+    using ArrT_cm = typename ArrT<T, _REGM, _REGM>::TYPE;
+    constexpr int elements_cm = ArrT<T, _REGM, _REGM>::ELEMENTS;
+
     #pragma unroll
-    for (int tki = 0; tki < KTileK; tki++)
+    for (int tki = 0; tki < _KTileK; tki++)
     {
         #pragma unroll
-        for(int i = tid; i < TileM * TileK / elements_a; i += total_threads)        
+        for(int i = tid; i < _TileM * _TileK / elements_a; i += total_threads)        
         {
-            half tmp_a[elements_a];
-            int y = i % TileM;
-            int x = i / TileM;
-            reinterpret_cast<ArrT_a*>(tmp_a)[0] = reinterpret_cast<ArrT_a*>(&a[(blockIdx.x * TileM + y) * k + tki * TileK + x * elements_a])[0];
+            T tmp_a[elements_a];
+            int y = i % _TileM;
+            int x = i / _TileM;
+            reinterpret_cast<ArrT_a*>(tmp_a)[0] = reinterpret_cast<ArrT_a*>(&a[(blockIdx.x * _TileM + y) * k + tki * _TileK + x * elements_a])[0];
             #pragma unroll
             for(int j = 0; j < elements_a; j++)    
             {
@@ -487,60 +436,73 @@ __global__ void tile_smem_float4_tile_reg_BT_kernel(half * __restrict__ a, half 
             }
         }
         #pragma unroll
-        for(int i = tid; i < TileK * TileN / elements_b; i += total_threads)        
+        for(int i = tid; i < _TileK * _TileN / elements_b; i += total_threads)        
         {
-            int y = i % TileK;
-            int x = i / TileK;
-            reinterpret_cast<ArrT_b*>(&sB[y][x * elements_b])[0] = reinterpret_cast<ArrT_b*>(&b[(tki * TileK + y) * n + blockIdx.y * TileN + x * elements_b])[0];
+            int y = i % _TileK;
+            int x = i / _TileK;
+            reinterpret_cast<ArrT_b*>(&sB[y][x * elements_b])[0] = reinterpret_cast<ArrT_b*>(&b[(tki * _TileK + y) * n + blockIdx.y * _TileN + x * elements_b])[0];
             
         }
         __syncthreads();
 
         // 允许k 不能被 TileK整除
         #pragma unroll
-        for (int i = 0; i < min(k - tki * TileK, TileK); i++)
+        for (int i = 0; i < min(k - tki * _TileK, _TileK); i++)
         {
             #pragma unroll
-            for (int j = 0; j < REGM / elements_cm; j++)
-                reinterpret_cast<ArrT_cm *>(fragA)[j] = reinterpret_cast<ArrT_cm *>(&sA[i][threadIdx.x * REGM])[j];
+            for (int j = 0; j < _REGM / elements_cm; j++)
+                reinterpret_cast<ArrT_cm *>(fragA)[j] = reinterpret_cast<ArrT_cm *>(&sA[i][threadIdx.x * _REGM])[j];
             #pragma unroll
-            for (int j = 0; j < REGN / elements_cn; j++)
-                reinterpret_cast<ArrT_cn *>(fragB)[j] = reinterpret_cast<ArrT_cn *>(&sB[i][threadIdx.y * REGN])[j];
-            // #pragma unroll
-            // for (int y = 0; y < REGM; y++) {
-            //     for (int x = 0; x < REGN; x++)
-            //     {
-            //         fragC[y][x] += fragA[y] * fragB[x];
-            //     }
-            // }
-            #pragma unroll
-            for (int y = 0; y < REGM; y++) {
-                for (int x = 0; x < REGN / 2; x++)
+            for (int j = 0; j < _REGN / elements_cn; j++)
+                reinterpret_cast<ArrT_cn *>(fragB)[j] = reinterpret_cast<ArrT_cn *>(&sB[i][threadIdx.y * _REGN])[j];
+            if constexpr (!std::is_same<T, __half>::value)
+            {
+                #pragma unroll
+                for (int y = 0; y < _REGM; y++)
                 {
-                    reinterpret_cast<__half2*>(fragC[y])[x] = __hfma2(__half2half2(fragA[y]) ,reinterpret_cast<__half2*>(fragB)[x], reinterpret_cast<__half2*>(fragC[y])[x]);
+                    for (int x = 0; x < _REGN; x++)
+                    {
+                        fragC[y][x] += fragA[y] * fragB[x];
+                    }
+                }
+            }
+            else
+            {
+                #pragma unroll
+                for (int y = 0; y < _REGM; y++)
+                {
+                    for (int x = 0; x < _REGN / 2; x++)
+                    {
+                        reinterpret_cast<__half2 *>(fragC[y])[x] = __hfma2(__half2half2(fragA[y]), reinterpret_cast<__half2 *>(fragB)[x], reinterpret_cast<__half2 *>(fragC[y])[x]);
+                    }
                 }
             }
         }
         __syncthreads();
     }
     #pragma unroll
-    for(int y = 0; y < REGM; y++) 
+    for(int y = 0; y < _REGM; y++) 
     {
-        #if (REGN % 8 == 0 && N % REGN == 0)
-        #pragma unroll
-        for (int x = 0; x < REGN / 8; x++)
-            reinterpret_cast<float4 *>(&c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN])[x] = reinterpret_cast<float4 *>(&fragC[y][0])[x];
-        #elif (REGN % 4 == 0 && N % REGN == 0)
-        #pragma unroll
-        for (int x = 0; x < REGN / 4; x++)
-            reinterpret_cast<float2 *>(&c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN])[x] = reinterpret_cast<float2 *>(&fragC[y][0])[x];
-        #else
-        #pragma unroll
-        for(int x = 0; x < REGN && blockIdx.x * TileM + threadIdx.x * REGM + y < M && blockIdx.y * TileN + threadIdx.y * REGN + x < N; x++)
+        if constexpr (_REGN % (sizeof(float4)/sizeof(T)) == 0 && N % _REGN == 0)
         {
-            c[(blockIdx.x * TileM + threadIdx.x * REGM + y) * n + blockIdx.y * TileN + threadIdx.y * REGN + x] = fragC[y][x];
+            #pragma unroll
+            for (int x = 0; x < _REGN / (sizeof(float4)/sizeof(T)); x++)
+                reinterpret_cast<float4 *>(&c[(blockIdx.x * _TileM + threadIdx.x * _REGM + y) * n + blockIdx.y * _TileN + threadIdx.y * _REGN])[x] = reinterpret_cast<float4 *>(&fragC[y][0])[x];
         }
-        #endif
+        else if constexpr (_REGN % (sizeof(float2)/sizeof(T)) == 0 && N % _REGN == 0)
+        {
+            #pragma unroll
+            for (int x = 0; x < _REGN / (sizeof(float2)/sizeof(T)); x++)
+                reinterpret_cast<float2 *>(&c[(blockIdx.x * _TileM + threadIdx.x * _REGM + y) * n + blockIdx.y * _TileN + threadIdx.y * _REGN])[x] = reinterpret_cast<float2 *>(&fragC[y][0])[x];
+        }
+        else
+        {
+            #pragma unroll
+            for (int x = 0; x < _REGN && blockIdx.x * _TileM + threadIdx.x * _REGM + y < M && blockIdx.y * _TileN + threadIdx.y * _REGN + x < N; x++)
+            {
+                c[(blockIdx.x * _TileM + threadIdx.x * _REGM + y) * n + blockIdx.y * _TileN + threadIdx.y * _REGN + x] = fragC[y][x];
+            }
+        }
     }
 }
 
@@ -598,112 +560,170 @@ void cuBLASgemm(int m, int n, int k, const T *A, const T *B, T *C, Timeit &t)
 
 int main() {
     srand(1111);
-    half *h_a, *h_b, *h_c;
-    half *d_a, *d_b, *d_c;
-    half *ground_truth;
-    h_a = (half*)malloc( M * K * sizeof(half));
-    h_b = (half*)malloc( K * N * sizeof(half));
-    h_c = (half*)malloc( M * N * sizeof(half));
-    ground_truth = (half*)malloc( M * N * sizeof(half));
+    dtype *h_a, *h_b, *h_c;
+    dtype *d_a, *d_b, *d_c;
+    dtype *ground_truth;
+    h_a = (dtype*)malloc( M * K * sizeof(dtype));
+    h_b = (dtype*)malloc( K * N * sizeof(dtype));
+    h_c = (dtype*)malloc( M * N * sizeof(dtype));
+    ground_truth = (dtype*)malloc( M * N * sizeof(dtype));
 
-    cudaMalloc((void**)&d_a, M * K * sizeof(half));
-    cudaMalloc((void**)&d_b, K * N * sizeof(half));
-    cudaMalloc((void**)&d_c, M * N * sizeof(half));
+    cudaMalloc((void**)&d_a, M * K * sizeof(dtype));
+    cudaMalloc((void**)&d_b, K * N * sizeof(dtype));
+    cudaMalloc((void**)&d_c, M * N * sizeof(dtype));
 
-    gen_rand_data<half>(h_a, M * K);
-    gen_rand_data<half>(h_b, K * N);
+    gen_rand_data<dtype>(h_a, M * K);
+    gen_rand_data<dtype>(h_b, K * N);
 
-    cudaMemcpy(d_a, h_a, M * K * sizeof(half), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_b, h_b, K * N * sizeof(half), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_a, h_a, M * K * sizeof(dtype), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_b, h_b, K * N * sizeof(dtype), cudaMemcpyHostToDevice);
     Timeit t = Timeit();
+    // warmup
+    cuBLASgemm<dtype>(M, N, K, h_a, h_b, ground_truth, t);
+    // warmup end
     print_centered("cublas gemm", 100, '=');
-    cuBLASgemm<half>(M, N, K, h_a, h_b, ground_truth, t);
+    cuBLASgemm<dtype>(M, N, K, h_a, h_b, ground_truth, t);
     float cublas_FLOPS = t.get_FLOPS();
     printf("time: %f ms\n", t.elapsed_time);
-    printf("FLOPS: %f FLOPS\n", t.get_FLOPS());
+    printf("throughput: %f KFLOPS\n", t.get_FLOPS() / 1e3);
     
 
     print_centered("gmem_kernel", 100, '=');
     try{
+        constexpr int TileM = 8;
+        constexpr int TileN = 16;
+        constexpr int TileK = 1; //ignore
+
+        constexpr int KTileM = (((M) + (TileM - 1))/TileM);
+        constexpr int KTileK = (((K) + (TileK - 1))/TileK);
+        constexpr int KTileN = (((N) + (TileN - 1))/TileN);
+
+        // constexpr int REGM = 8;
+        // constexpr int REGN = 8;
         // 支持任意形状 M,N,K 及 TileM,TileN,TileK
         dim3 grid(KTileM, KTileN);
         dim3 block(TileM, TileN);
         t.start();
-        gmem_kernel<<<grid, block>>>(d_a, d_b, d_c, M, N, K);
+        gmem_kernel<dtype, TileM, TileN, TileK, KTileM, KTileN, KTileK><<<grid, block>>>(d_a, d_b, d_c, M, N, K);
         t.stop();
         CHECK(cudaGetLastError());
-        CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(half), cudaMemcpyDeviceToHost));
+        CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(dtype), cudaMemcpyDeviceToHost));
         check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "gmem_kernel");
+        printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
         printf("time: %f ms\n", t.elapsed_time);
-        printf("FLOPS: %f FLOPS(%.2f%%)\n", t.get_FLOPS(), t.get_FLOPS() / cublas_FLOPS * 100);
+        printf("throughput: %f KFLOPS(%.2f%%)\n", t.get_FLOPS() / 1e3, t.get_FLOPS() / cublas_FLOPS * 100);
     }catch (const std::exception& e) {
         std::cerr << "Caught an exception: " << e.what() << std::endl;
     }
     print_centered("tile_smem_kernel", 100, '=');
     try{
+        constexpr int TileM = 8;
+        constexpr int TileN = 16;
+        constexpr int TileK = 4;
+
+        constexpr int KTileM = (((M) + (TileM - 1))/TileM);
+        constexpr int KTileK = (((K) + (TileK - 1))/TileK);
+        constexpr int KTileN = (((N) + (TileN - 1))/TileN);
+
+        // constexpr int REGM = 8;
+        // constexpr int REGN = 8;
         // 支持任意形状 M,N,K 及 TileM,TileN,TileK
         dim3 grid(KTileM, KTileN);
         dim3 block(TileM, TileN);
         t.start();
-        tile_smem_kernel<<<grid, block>>>(d_a, d_b, d_c, M, N, K);
+        tile_smem_kernel<dtype, TileM, TileN, TileK, KTileM, KTileN, KTileK><<<grid, block>>>(d_a, d_b, d_c, M, N, K);
         t.stop();
         CHECK(cudaGetLastError());
-        CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(half), cudaMemcpyDeviceToHost));
+        CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(dtype), cudaMemcpyDeviceToHost));
         check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "tile_smem_kernel");
+        printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
         printf("time: %f ms\n", t.elapsed_time);
-        printf("FLOPS: %f FLOPS(%.2f%%)\n", t.get_FLOPS(), t.get_FLOPS() / cublas_FLOPS * 100);
+        printf("throughput: %f KFLOPS(%.2f%%)\n", t.get_FLOPS() / 1e3, t.get_FLOPS() / cublas_FLOPS * 100);
     }catch (const std::exception& e) {
         std::cerr << "Caught an exception: " << e.what() << std::endl;
     }
     print_centered("tile_smem_float4", 100, '=');
     try{
+        constexpr int TileM = 16;
+        constexpr int TileN = 8;
+        constexpr int TileK = 8;
+
+        constexpr int KTileM = (((M) + (TileM - 1))/TileM);
+        constexpr int KTileK = (((K) + (TileK - 1))/TileK);
+        constexpr int KTileN = (((N) + (TileN - 1))/TileN);
+
+        // constexpr int REGM = 8;
+        // constexpr int REGN = 8;
         // 支持任意形状 M,N,K 及 TileM,TileN,TileK
         dim3 grid(KTileM, KTileN);
         dim3 block(TileM, TileN);
         t.start();
-        tile_smem_float4_kernel<<<grid, block>>>(d_a, d_b, d_c, M, N, K);
+        tile_smem_float4_kernel<dtype, TileM, TileN, TileK, KTileM, KTileN, KTileK><<<grid, block>>>(d_a, d_b, d_c, M, N, K);
         t.stop();
         CHECK(cudaGetLastError());
-        CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(half), cudaMemcpyDeviceToHost));
+        CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(dtype), cudaMemcpyDeviceToHost));
         check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "tile_smem_float4");
+        printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
         printf("time: %f ms\n", t.elapsed_time);
-        printf("FLOPS: %f FLOPS(%.2f%%)\n", t.get_FLOPS(), t.get_FLOPS() / cublas_FLOPS * 100);
+        printf("throughput: %f KFLOPS(%.2f%%)\n", t.get_FLOPS() / 1e3, t.get_FLOPS() / cublas_FLOPS * 100);
     }catch (const std::exception& e) {
         std::cerr << "Caught an exception: " << e.what() << std::endl;
     }
     print_centered("tile_smem_float4_tile_reg", 100, '=');
     try{
+        constexpr int TileM = 256;
+        constexpr int TileN = 128;
+        constexpr int TileK = 16;
+
+        constexpr int KTileM = (((M) + (TileM - 1))/TileM);
+        constexpr int KTileK = (((K) + (TileK - 1))/TileK);
+        constexpr int KTileN = (((N) + (TileN - 1))/TileN);
+
+        constexpr int REGM = 16;
+        constexpr int REGN = 16;
         // 支持任意形状 M,N,K 及 TileM,TileN,TileK
         assert(TileM % REGM == 0);
         assert(TileN % REGN == 0);
         dim3 grid(KTileM, KTileN);
         dim3 block(TileM/REGM, TileN/REGN);
         t.start();
-        tile_smem_float4_tile_reg_kernel<<<grid, block>>>(d_a, d_b, d_c, M, N, K);
+        tile_smem_float4_tile_reg_kernel<dtype, TileM, TileN, TileK, KTileM, KTileN, KTileK, REGM, REGN><<<grid, block>>>(d_a, d_b, d_c, M, N, K);
         t.stop();
         CHECK(cudaGetLastError());
-        CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(half), cudaMemcpyDeviceToHost));
+        CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(dtype), cudaMemcpyDeviceToHost));
         check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "tile_smem_float4_tile_reg");
+        printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
         printf("time: %f ms\n", t.elapsed_time);
-        printf("FLOPS: %f FLOPS(%.2f%%)\n", t.get_FLOPS(), t.get_FLOPS() / cublas_FLOPS * 100);
+        printf("throughput: %f KFLOPS(%.2f%%)\n", t.get_FLOPS() / 1e3, t.get_FLOPS() / cublas_FLOPS * 100);
     }catch (const std::exception& e) {
         std::cerr << "Caught an exception: " << e.what() << std::endl;
     }
     print_centered("tile_smem_float4_tile_reg_BT", 100, '=');
     try{
+        constexpr int TileM = 256;
+        constexpr int TileN = 128;
+        constexpr int TileK = 8;
+
+        constexpr int KTileM = (((M) + (TileM - 1))/TileM);
+        constexpr int KTileK = (((K) + (TileK - 1))/TileK);
+        constexpr int KTileN = (((N) + (TileN - 1))/TileN);
+
+        constexpr int REGM = 16;
+        constexpr int REGN = 16;
         // 支持任意形状 M,N,K 及 TileM,TileN,TileK
         assert(TileM % REGM == 0);
         assert(TileN % REGN == 0);
         dim3 grid(KTileM, KTileN);
         dim3 block(TileM/REGM, TileN/REGN);
         t.start();
-        tile_smem_float4_tile_reg_BT_kernel<<<grid, block>>>(d_a, d_b, d_c, M, N, K);
+        tile_smem_float4_tile_reg_BT_kernel<dtype, TileM, TileN, TileK, KTileM, KTileN, KTileK, REGM, REGN><<<grid, block>>>(d_a, d_b, d_c, M, N, K);
         t.stop();
         CHECK(cudaGetLastError());
-        CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(half), cudaMemcpyDeviceToHost));
+        CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(dtype), cudaMemcpyDeviceToHost));
         check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "tile_smem_float4_tile_reg_BT");
+        printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
         printf("time: %f ms\n", t.elapsed_time);
-        printf("FLOPS: %f FLOPS(%.2f%%)\n", t.get_FLOPS(), t.get_FLOPS() / cublas_FLOPS * 100);
+        printf("throughput: %f KFLOPS(%.2f%%)\n", t.get_FLOPS() / 1e3, t.get_FLOPS() / cublas_FLOPS * 100);
     }catch (const std::exception& e) {
         std::cerr << "Caught an exception: " << e.what() << std::endl;
     }
