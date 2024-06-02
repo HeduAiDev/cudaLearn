@@ -10,7 +10,7 @@ using namespace cute;
 #define K 1024
 
 // half | float
-using dtype = float;
+using dtype = half;
 
 
 #define CHECK(call)\
@@ -118,7 +118,7 @@ struct Timeit {
     }
     __inline__ float get_FLOPS()
     {
-       return ((float)M * N * K * 2) / (elapsed_time) / 1e3;
+       return ((float)M * N * K * 2) / (elapsed_time * 1e-3);
     }
 };
 
@@ -127,7 +127,7 @@ __global__ void check_kernel(T1 *a, T2 *b, bool* flg, unsigned int n) {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     for(int i = tid; i < n; i += blockDim.x * gridDim.x) {
         if(abs((float) (a[i] - b[i]) > 1e-6)) {
-            printf("a[%d] = %.10f, b[%d] = %.10f\n", i, __half2float(a[i]), i, __half2float(b[i]));
+            // printf("a[%d] = %.10f, b[%d] = %.10f\n", i, __half2float(a[i]), i, __half2float(b[i]));
             *flg = false;
         }
         if (*flg == false) return;
@@ -182,6 +182,7 @@ __global__ void gmem_kernel(T *a, T *b, T *c, int m, int n, int k)
         for (int col = blockIdx.y * blockDim.y + threadIdx.y; col < n; col += total_threads) 
         {
             T sum = 0;
+            #pragma unroll
             for (int i = 0; i <k; i++)
             {
                 sum += a[row * k + i] * b[i * n + col];
@@ -348,6 +349,7 @@ __global__ void tile_smem_float4_tile_reg_kernel(T * __restrict__ a, T * __restr
                 #pragma unroll
                 for (int y = 0; y < _REGM; y++)
                 {
+                    #pragma unroll
                     for (int x = 0; x < _REGN; x++)
                     {
                         fragC[y][x] += fragA[y] * fragB[x];
@@ -359,6 +361,7 @@ __global__ void tile_smem_float4_tile_reg_kernel(T * __restrict__ a, T * __restr
                 #pragma unroll
                 for (int y = 0; y < _REGM; y++)
                 {
+                    #pragma unroll
                     for (int x = 0; x < _REGN / 2; x++)
                     {
                         reinterpret_cast<__half2 *>(fragC[y])[x] = __hfma2(__half2half2(fragA[y]), reinterpret_cast<__half2 *>(fragB)[x], reinterpret_cast<__half2 *>(fragC[y])[x]);
@@ -460,6 +463,7 @@ __global__ void tile_smem_float4_tile_reg_BT_kernel(T * __restrict__ a, T * __re
                 #pragma unroll
                 for (int y = 0; y < _REGM; y++)
                 {
+                    #pragma unroll
                     for (int x = 0; x < _REGN; x++)
                     {
                         fragC[y][x] += fragA[y] * fragB[x];
@@ -471,6 +475,7 @@ __global__ void tile_smem_float4_tile_reg_BT_kernel(T * __restrict__ a, T * __re
                 #pragma unroll
                 for (int y = 0; y < _REGM; y++)
                 {
+                    #pragma unroll
                     for (int x = 0; x < _REGN / 2; x++)
                     {
                         reinterpret_cast<__half2 *>(fragC[y])[x] = __hfma2(__half2half2(fragA[y]), reinterpret_cast<__half2 *>(fragB)[x], reinterpret_cast<__half2 *>(fragC[y])[x]);
@@ -543,6 +548,14 @@ void cuBLASgemm(int m, int n, int k, const T *A, const T *B, T *C, Timeit &t)
                                  devPtrA, k,
                                  &beta,
                                  devPtrC, n);
+    // cublasStatus_t status = cublasGemmEx(handle,
+    //                              CUBLAS_OP_N, CUBLAS_OP_N,
+    //                              n, m, k,
+    //                              &alpha,
+    //                              devPtrB, CUDA_R_16F, n,
+    //                              devPtrA, CUDA_R_16F, k,
+    //                              &beta,
+    //                              devPtrC, CUDA_R_16F, n, CUBLAS_COMPUTE_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
     t.stop();
     if (status != CUBLAS_STATUS_SUCCESS)
     {
@@ -585,7 +598,7 @@ int main() {
     cuBLASgemm<dtype>(M, N, K, h_a, h_b, ground_truth, t);
     float cublas_FLOPS = t.get_FLOPS();
     printf("time: %f ms\n", t.elapsed_time);
-    printf("throughput: %f KFLOPS\n", t.get_FLOPS() / 1e3);
+    printf("throughput: %f TFLOPS\n", t.get_FLOPS() * 1e-12);
     
 
     print_centered("gmem_kernel", 100, '=');
@@ -611,7 +624,7 @@ int main() {
         check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "gmem_kernel");
         printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
         printf("time: %f ms\n", t.elapsed_time);
-        printf("throughput: %f KFLOPS(%.2f%%)\n", t.get_FLOPS() / 1e3, t.get_FLOPS() / cublas_FLOPS * 100);
+        printf("throughput: %f TFLOPS(%.2f%%)\n", t.get_FLOPS() * 1e-12, t.get_FLOPS() / cublas_FLOPS * 100);
     }catch (const std::exception& e) {
         std::cerr << "Caught an exception: " << e.what() << std::endl;
     }
@@ -638,7 +651,7 @@ int main() {
         check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "tile_smem_kernel");
         printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
         printf("time: %f ms\n", t.elapsed_time);
-        printf("throughput: %f KFLOPS(%.2f%%)\n", t.get_FLOPS() / 1e3, t.get_FLOPS() / cublas_FLOPS * 100);
+        printf("throughput: %f TFLOPS(%.2f%%)\n", t.get_FLOPS() * 1e-12, t.get_FLOPS() / cublas_FLOPS * 100);
     }catch (const std::exception& e) {
         std::cerr << "Caught an exception: " << e.what() << std::endl;
     }
@@ -665,7 +678,7 @@ int main() {
         check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "tile_smem_float4");
         printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
         printf("time: %f ms\n", t.elapsed_time);
-        printf("throughput: %f KFLOPS(%.2f%%)\n", t.get_FLOPS() / 1e3, t.get_FLOPS() / cublas_FLOPS * 100);
+        printf("throughput: %f TFLOPS(%.2f%%)\n", t.get_FLOPS() * 1e-12, t.get_FLOPS() / cublas_FLOPS * 100);
     }catch (const std::exception& e) {
         std::cerr << "Caught an exception: " << e.what() << std::endl;
     }
@@ -694,7 +707,7 @@ int main() {
         check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "tile_smem_float4_tile_reg");
         printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
         printf("time: %f ms\n", t.elapsed_time);
-        printf("throughput: %f KFLOPS(%.2f%%)\n", t.get_FLOPS() / 1e3, t.get_FLOPS() / cublas_FLOPS * 100);
+        printf("throughput: %f TFLOPS(%.2f%%)\n", t.get_FLOPS() * 1e-12, t.get_FLOPS() / cublas_FLOPS * 100);
     }catch (const std::exception& e) {
         std::cerr << "Caught an exception: " << e.what() << std::endl;
     }
@@ -723,7 +736,7 @@ int main() {
         check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "tile_smem_float4_tile_reg_BT");
         printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
         printf("time: %f ms\n", t.elapsed_time);
-        printf("throughput: %f KFLOPS(%.2f%%)\n", t.get_FLOPS() / 1e3, t.get_FLOPS() / cublas_FLOPS * 100);
+        printf("throughput: %f TFLOPS(%.2f%%)\n", t.get_FLOPS() * 1e-12, t.get_FLOPS() / cublas_FLOPS * 100);
     }catch (const std::exception& e) {
         std::cerr << "Caught an exception: " << e.what() << std::endl;
     }

@@ -1,7 +1,7 @@
 test/
 dist/*
 build/*
-CUDATutorial/
+others/*
 
 dist/.gitkeep
 build/.gitkeep
