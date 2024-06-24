@@ -3,6 +3,7 @@ dist/*
 build/*
 others/*
 3rd/
+.xmake
 !3rd/xmake.lua
 !dist/.gitkeep
 !build/.gitkeep

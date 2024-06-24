@@ -1,6 +1,0 @@
-{
-    packages = {
-        [[E:\Laboratory\cudaLearn\3rd\cutlass]],
-        [[E:\Laboratory\cudaLearn\3rd\Eigen]]
-    }
-}
