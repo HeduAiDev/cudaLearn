@@ -1,0 +1,14 @@
+{
+    find_program = {
+        zig = false,
+        unzip = "unzip",
+        tar = "tar",
+        git = "git",
+        nim = false,
+        gzip = "gzip",
+        ["cl.exe"] = [[D:\Env\VSBT\2022\BuildTools\VC\Tools\MSVC\14.39.33519\bin\HostX64\x64\cl.exe]]
+    },
+    find_programver = {
+        ["D:\\Env\\VSBT\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.39.33519\\bin\\HostX64\\x64\\cl.exe"] = false
+    }
+}

@@ -2,15 +2,18 @@
 #include <iostream>
 #include <cute/tensor.hpp>
 #include <cublas_v2.h>
+#include <mma.h>
 
 using namespace cute;
 
-#define M 2048
+#define M 65536
 #define N 2048
 #define K 1024
 
 // half | float
 using dtype = half;
+
+#define div_ceil(a,b) (((a) + (b) - 1) / (b))
 
 
 #define CHECK(call)\
@@ -511,6 +514,29 @@ __global__ void tile_smem_float4_tile_reg_BT_kernel(T * __restrict__ a, T * __re
     }
 }
 
+template<typename T, int WMMA_M, int WMMA_N, int WMMA_K>
+__global__ void wmma_naive(half *__restrict__ a, half *__restrict__ b, half *__restrict__ c, int m, int n, int k) {
+    int offset_row = blockIdx.x * WMMA_M;
+    int offset_col = blockIdx.y * WMMA_N;
+    if (offset_row >= m || offset_col >= n) return;
+    constexpr int KTileK = div_ceil(K, WMMA_K);
+    // constexpr int KTileM = div_ceil(M, WMMA_M);
+    // constexpr int KTileN = div_ceil(N, WMMA_N);
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K, half, nvcuda::wmma::row_major> a_frag;
+    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K, half, nvcuda::wmma::col_major> b_frag;
+    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, half> c_frag;
+    nvcuda::wmma::fill_fragment(c_frag, 0.0f);
+
+    for (int i = 0; i < KTileK; i++)
+    {
+        nvcuda::wmma::load_matrix_sync(a_frag, a + offset_row * k + i * WMMA_K, k);
+        nvcuda::wmma::load_matrix_sync(b_frag, b + offset_col * k + i * WMMA_K, k);
+        nvcuda::wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+    }
+    __syncthreads();
+    nvcuda::wmma::store_matrix_sync(c + offset_row * n + offset_col, c_frag, n, nvcuda::wmma::mem_row_major);
+}
+
 
 template <class T>
 void cuBLASgemm(int m, int n, int k, const T *A, const T *B, T *C, Timeit &t)
@@ -519,6 +545,7 @@ void cuBLASgemm(int m, int n, int k, const T *A, const T *B, T *C, Timeit &t)
     cublasCreate(&handle);
     // malloc on device
     T *devPtrA, *devPtrB, *devPtrC;
+    cublasSetMathMode(handle, CUBLAS_TENSOR_OP_MATH);
     cudaMalloc((void **)&devPtrA, sizeof(T) * m * k);
     cudaMalloc((void **)&devPtrB, sizeof(T) * k * n);
     cudaMalloc((void **)&devPtrC, sizeof(T) * m * n);
@@ -570,6 +597,17 @@ void cuBLASgemm(int m, int n, int k, const T *A, const T *B, T *C, Timeit &t)
     cublasDestroy(handle);
 }
 
+// convert row-major matrix to column-major matrix
+void row2col(const dtype *a, int rows, int cols, dtype *b)
+{
+    int size = rows * cols;
+    for (int i = 0; i < size; i++)
+    {
+        int row = i / cols;
+        int col = i % cols;
+        b[col * rows + row] = a[i];
+    }
+}
 
 int main() {
     srand(1111);
@@ -734,6 +772,34 @@ int main() {
         CHECK(cudaGetLastError());
         CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(dtype), cudaMemcpyDeviceToHost));
         check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "tile_smem_float4_tile_reg_BT");
+        printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
+        printf("time: %f ms\n", t.elapsed_time);
+        printf("throughput: %f TFLOPS(%.2f%%)\n", t.get_FLOPS() * 1e-12, t.get_FLOPS() / cublas_FLOPS * 100);
+    }catch (const std::exception& e) {
+        std::cerr << "Caught an exception: " << e.what() << std::endl;
+    }
+    print_centered("wmma_naive", 100, '=');
+    try{
+
+        constexpr int WMMA_M = 16;
+        constexpr int WMMA_N = 16;
+        constexpr int WMMA_K = 16;
+        constexpr int WARP_SIZE = 32;
+        dtype *h_b_col_major;
+        dtype *d_b_col_major;
+        h_b_col_major = (dtype*)malloc(K * N * sizeof(dtype));
+        cudaMalloc((void**)&d_b_col_major, K * N * sizeof(dtype));
+        row2col(h_b, K, N, h_b_col_major);        
+        cudaMemcpy(d_b_col_major, h_b_col_major, K * N * sizeof(dtype), cudaMemcpyHostToDevice);
+        // 支持任意形状 M,N,K 及 TileM,TileN,TileK
+        dim3 grid(div_ceil(M, WMMA_M), div_ceil(N, WMMA_N));
+        dim3 block(WARP_SIZE);
+        t.start();
+        wmma_naive<half, WMMA_M, WMMA_N, WMMA_K><<<grid, block>>>(d_a, d_b_col_major, d_c, M, N, K);
+        t.stop();
+        CHECK(cudaGetLastError());
+        CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(dtype), cudaMemcpyDeviceToHost));
+        check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "wmma_naive");
         printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
         printf("time: %f ms\n", t.elapsed_time);
         printf("throughput: %f TFLOPS(%.2f%%)\n", t.get_FLOPS() * 1e-12, t.get_FLOPS() / cublas_FLOPS * 100);

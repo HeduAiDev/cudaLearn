@@ -1,0 +1,7 @@
+checking for platform ... windows
+checking for architecture ... x64
+checking for Microsoft Visual Studio (x64) version ... 2022
+updating repositories .. error: fatal: not a git repository (or any of the parent directories): .git
+
+warning: You are working in the project directory(E:\Laboratory\cudaLearn) and you can also
+force to build in current directory via run `xmake -P .`

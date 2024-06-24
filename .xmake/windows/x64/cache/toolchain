@@ -1,0 +1,42 @@
+{
+    msvc_arch_x64_plat_windows = {
+        vs_toolset = "14.39.33519",
+        vs = "2022",
+        vs_sdkver = "10.0.22621.0",
+        vcvars = {
+            WindowsSdkBinPath = [[C:\Program Files (x86)\Windows Kits\10\bin\]],
+            VCToolsRedistDir = [[D:\Env\VSBT\2022\BuildTools\VC\Redist\MSVC\14.38.33135\]],
+            VSCMD_ARG_TGT_ARCH = "x64",
+            LIBPATH = [[D:\Env\VSBT\2022\BuildTools\VC\Tools\MSVC\14.39.33519\lib\x64;D:\Env\VSBT\2022\BuildTools\VC\Tools\MSVC\14.39.33519\lib\x86\store\references;C:\Program Files (x86)\Windows Kits\10\UnionMetadata\10.0.22621.0;C:\Program Files (x86)\Windows Kits\10\References\10.0.22621.0;C:\Windows\Microsoft.NET\Framework64\v4.0.30319]],
+            INCLUDE = [[D:\Env\VSBT\2022\BuildTools\VC\Tools\MSVC\14.39.33519\include;D:\Env\VSBT\2022\BuildTools\VC\Auxiliary\VS\include;C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\ucrt;C:\Program Files (x86)\Windows Kits\10\\include\10.0.22621.0\\um;C:\Program Files (x86)\Windows Kits\10\\include\10.0.22621.0\\shared;C:\Program Files (x86)\Windows Kits\10\\include\10.0.22621.0\\winrt;C:\Program Files (x86)\Windows Kits\10\\include\10.0.22621.0\\cppwinrt;D:\Env\VSBT\2022\BuildTools\VC\Tools\MSVC\14.39.33519\include;C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\ucrt;C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\um;C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\shared;C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\winrt;C:\Program Files (x86)\Windows Kits\10\include\10.0.22621.0\cppwinrt]],
+            VisualStudioVersion = "17.0",
+            LIB = [[D:\Env\VSBT\2022\BuildTools\VC\Tools\MSVC\14.39.33519\lib\x64;C:\Program Files (x86)\Windows Kits\10\lib\10.0.22621.0\ucrt\x64;C:\Program Files (x86)\Windows Kits\10\\lib\10.0.22621.0\\um\x64;D:\Env\VSBT\2022\BuildTools\VC\Tools\MSVC\14.39.33519\lib\x64;C:\Program Files (x86)\Windows Kits\10\lib\10.0.22621.0\ucrt\x64;C:\Program Files (x86)\Windows Kits\10\lib\10.0.22621.0\um\x64]],
+            WindowsSDKVersion = "10.0.22621.0",
+            ExtensionSdkDir = [[C:\Program Files (x86)\Microsoft SDKs\Windows Kits\10\ExtensionSDKs]],
+            PATH = [[D:\Env\VSBT\2022\BuildTools\VC\Tools\MSVC\14.39.33519\bin\HostX64\x64;D:\Env\VSBT\2022\BuildTools\Common7\IDE\VC\VCPackages;D:\Env\VSBT\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\TestWindow;D:\Env\VSBT\2022\BuildTools\MSBuild\Current\bin\Roslyn;C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\\x64;C:\Program Files (x86)\Windows Kits\10\bin\\x64;D:\Env\VSBT\2022\BuildTools\\MSBuild\Current\Bin\amd64;C:\Windows\Microsoft.NET\Framework64\v4.0.30319;D:\Env\VSBT\2022\BuildTools\Common7\IDE\;D:\Env\VSBT\2022\BuildTools\Common7\Tools\;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2\bin;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2\libnvvp;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;D:\Software\bandizip\;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;C:\Program Files\NVIDIA Corporation\NVIDIA NvDLISR;C:\Program Files\NVIDIA Corporation\Nsight Compute 2023.2.2\;D:\Env\Git\bin;D:\Env\Golang\bin;E:\Laboratory\Go\bin;D:\Env\MinGW\bin;D:\Env\Cmake-3.28.1\bin;D:\Env\VSBT\2022\BuildTools\VC\Tools\MSVC\14.39.33519\bin\Hostx64\x64;C:\Program Files\Git\cmd;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2\bin\\..\extras\CUPTI\lib64;D:\Env\Miniconda;D:\Env\Miniconda\Library\mingw-w64\bin;D:\Env\Miniconda\Library\usr\bin;D:\Env\Miniconda\Library\bin;D:\Env\Miniconda\Scripts;D:\Env\Miniconda\bin;D:\Env\Miniconda\condabin;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2\bin;C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2\libnvvp;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0;C:\Windows\System32\OpenSSH;D:\Software\bandizip;C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common;C:\Program Files\NVIDIA Corporation\NVIDIA NvDLISR;C:\Program Files\NVIDIA Corporation\Nsight Compute 2023.2.2;D:\Env\Git\bin;D:\Env\Golang\bin;E:\Laboratory\Go\bin;D:\Env\MinGW\bin;D:\Env\Cmake-3.28.1\bin;C:\Users\zhou.jianqi\scoop\shims;D:\Env\Miniconda;D:\Env\Miniconda\Library\mingw-w64\bin;D:\Env\Miniconda\Library\usr\bin;D:\Env\Miniconda\Library\bin;D:\Env\Miniconda\Scripts;C:\Users\zhou.jianqi\AppData\Local\Micr;C:\Program Files\NVIDIA Corporation\Nsight Systems 2023.2.3\target-windows-x64;C:\Program Files\NVIDIA Corporation\Nsight Systems 2023.2.3\host-windows-x64;D:\Software\Vscode\Microsoft VS Code\bin;D:\Env\texlive\2024\bin\windows;C:\Users\zhou.jianqi\xmake;D:\Env\VSBT\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;D:\Env\VSBT\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;D:\Env\VSBT\2022\BuildTools\Common7\IDE\VC\Linux\bin\ConnectionManagerExe]],
+            VSInstallDir = [[D:\Env\VSBT\2022\BuildTools\]],
+            UCRTVersion = "10.0.22621.0",
+            VSCMD_VER = "17.9.6",
+            UniversalCRTSdkDir = [[C:\Program Files (x86)\Windows Kits\10\]],
+            DevEnvdir = [[D:\Env\VSBT\2022\BuildTools\Common7\IDE\]],
+            WindowsLibPath = [[C:\Program Files (x86)\Windows Kits\10\UnionMetadata\10.0.22621.0;C:\Program Files (x86)\Windows Kits\10\References\10.0.22621.0]],
+            WindowsSdkVerBinPath = [[C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\]],
+            VSCMD_ARG_app_plat = "Desktop",
+            VCToolsInstallDir = [[D:\Env\VSBT\2022\BuildTools\VC\Tools\MSVC\14.39.33519\]],
+            VSCMD_ARG_HOST_ARCH = "x64",
+            VCToolsVersion = "14.39.33519",
+            VCIDEInstallDir = [[D:\Env\VSBT\2022\BuildTools\Common7\IDE\VC\]],
+            VS170COMNTOOLS = [[D:\Env\VSBT\2022\BuildTools\Common7\Tools\]],
+            VCInstallDir = [[D:\Env\VSBT\2022\BuildTools\VC\]],
+            WindowsSdkDir = [[C:\Program Files (x86)\Windows Kits\10\]]
+        },
+        arch = "x64",
+        vcarchs = {
+            "arm64",
+            "x64",
+            "x86"
+        },
+        plat = "windows",
+        __global = true
+    }
+}
