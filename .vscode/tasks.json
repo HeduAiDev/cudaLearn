@@ -1,0 +1,66 @@
+{
+	"version": "2.0.0",
+	"windows": {
+		"options": {
+			"shell": {
+				"executable": "cmd.exe",
+				"args": [
+					"/d", "/c"
+				]
+			}
+		}
+	},
+	"tasks": [
+		{
+			"type": "shell",
+			"label": "编译并运行",
+			"windows": {
+				"command": "chcp 65001 && xmake build ${fileBasenameNoExtension} && xmake run ${fileBasenameNoExtension}"
+			},
+			"command": "xmake build ${fileBasenameNoExtension} && xmake run ${fileBasenameNoExtension}",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"clear": false,
+				"panel": "dedicated",
+			},
+			"group": {
+				"kind": "none",
+				"isDefault": true
+			},
+			"detail": "单文件（当前正在编辑的文件）编译并运行"
+		},
+		{
+			"type": "shell",
+			"label": "Nsight Compute",
+			"windows": {
+				"command": "ncu"
+			},
+			"command": "ncu",
+			"args": [
+				"--set",
+				"full",
+				"--open-in-ui",
+				"-k",
+				"\"regex:^(?!check|test|valid).*\"", //过滤掉用来验证结果的kernel
+				"--target-processes",
+				"all",
+				".//dist//${fileBasenameNoExtension}",
+			],
+			"options": {
+				"cwd": "${fileDirname}"
+			},
+			"presentation": {
+				"echo": true,
+
+			},
+			"group": {
+				"kind": "none",
+				"isDefault": true
+			},
+			"detail": "使用Nsight Compute cli（ncu）调试当前文件并在Nsight Compute UI打开报告"
+		},
+	]
+}

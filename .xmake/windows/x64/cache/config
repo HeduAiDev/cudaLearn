@@ -1,3 +1,10 @@
 {
-    recheck = true
+    mtimes = {
+        ["xmake.lua"] = 1719220661,
+        ["3rd\\xmake.lua"] = 1719220424
+    },
+    recheck = false,
+    options = {
+        clean = true
+    }
 }

@@ -17,6 +17,7 @@ using namespace cute;
   }\
 }
 
+
 template<typename T, int Size>
 struct alignas(sizeof(T) * Size) AlignedVector {
     T val[Size];
