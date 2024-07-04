@@ -9,7 +9,6 @@
             "type": "cuda-gdb",
             "request": "launch",
             "program": "${fileDirname}/dist/{filename}.exe",
-            // "preLaunchTask": "mynvcc"
         },
         {
             "name": "CUDA C++: Attach",

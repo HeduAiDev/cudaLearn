@@ -4,6 +4,8 @@ build/*
 others/*
 3rd/
 .xmake
+.vscode/*
 !3rd/xmake.lua
 !dist/.gitkeep
 !build/.gitkeep
+!.vscode/tasks.json

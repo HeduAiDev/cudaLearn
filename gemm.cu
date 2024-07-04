@@ -3,17 +3,28 @@
 #include <cute/tensor.hpp>
 #include <cublas_v2.h>
 #include <mma.h>
+#include <stdint.h>
 
 using namespace cute;
 
-#define M 65536
-#define N 2048
-#define K 1024
+#define M 256
+#define N 256
+#define K 128
 
 // half | float
 using dtype = half;
 
 #define div_ceil(a,b) (((a) + (b) - 1) / (b))
+
+#define HMMA16816(RD0, RD1, RA0, RA1, RA2, RA3, RB0, RB1, RC0, RC1)                                                    \
+    asm volatile("mma.sync.aligned.m16n8k16.row.col.f16.f16.f16.f16 {%0, %1}, {%2, %3, %4, %5}, {%6, %7}, {%8, %9};\n" \
+                 : "=r"(RD0), "=r"(RD1)                                                                                \
+                 : "r"(RA0), "r"(RA1), "r"(RA2), "r"(RA3), "r"(RB0), "r"(RB1), "r"(RC0), "r"(RC1))
+
+#define HMMA1688(RD0, RD1, RA0, RA1, RB0, RC0, RC1)                                                    \
+    asm volatile("mma.sync.aligned.m16n8k8.row.col.f16.f16.f16.f16 {%0, %1}, {%2, %3}, {%4}, {%5, %6};\n" \
+                 : "=r"(RD0), "=r"(RD1)                                                                                \
+                 : "r"(RA0), "r"(RA1), "r"(RB0), "r"(RC0), "r"(RC1))
 
 
 #define CHECK(call)\
@@ -537,6 +548,59 @@ __global__ void wmma_naive(half *__restrict__ a, half *__restrict__ b, half *__r
     nvcuda::wmma::store_matrix_sync(c + offset_row * n + offset_col, c_frag, n, nvcuda::wmma::mem_row_major);
 }
 
+template<typename T, int _TileM, int _TileN, int _TileK, int MMA_M = 16, int MMA_N = 8, int MMA_K = 8>
+__global__ void mma_naive(half *__restrict__ a, half *__restrict__ b, half *__restrict__ c, int m, int n, int k) {
+    int offset_row = blockIdx.x * _TileM;
+    int offset_col = blockIdx.y * _TileN;
+    if (offset_row >= m || offset_col >= n) return;
+    constexpr int KTileK = div_ceil(K, _TileK);
+    int tid = threadIdx.y * blockDim.x + threadIdx.x;
+    int laneId = tid % 32;
+    int warpId = tid / 32;
+
+    int wM = (warpId % (_TileM / MMA_M)) * MMA_M;
+    int wN = (warpId / (_TileM / MMA_M)) * MMA_N;
+
+    int outer = laneId / 4;
+    int inner = laneId % 4;
+    uint32_t RD[2] = {0, 0};
+
+    int *c_ptr = reinterpret_cast<int *>(&c[(offset_row + wM) * n + offset_col + wN]);
+    for (int i = 0; i < KTileK; i++)
+    {
+        int *a_ptr = reinterpret_cast<int *>(&a[(offset_row + wM) * k + i * _TileK]);
+        int *b_ptr = reinterpret_cast<int *>(&b[(offset_col + wN) * k + i * _TileK]);
+        
+        // for(int t = 0; t < 32; t++)
+        // if (i == 0 && threadIdx.x == t && blockIdx.y == 1)
+        // {
+        //     printf("threadId %d\n", threadIdx.x);
+        //     printf("A0: %5.0f %5.0f\n", __half2float(reinterpret_cast<half *>(&a_ptr[outer * (k/2) + inner])[0]), __half2float(reinterpret_cast<half *>(&a_ptr[outer * (k/2) + inner])[1]));
+        //     printf("A1: %5.0f %5.0f\n", __half2float(reinterpret_cast<half *>(&a_ptr[(outer + 8) * (k/2) + inner])[0]), __half2float(reinterpret_cast<half *>(&a_ptr[(outer + 8) * (k/2) + inner])[1]));
+        //     printf("B0: %5.0f %5.0f\n", __half2float(reinterpret_cast<half *>(&b_ptr[outer * (k/2) + inner])[0]), __half2float(reinterpret_cast<half *>(&b_ptr[outer * (k/2) + inner])[1]));
+        //     printf("C0: %5.0f %5.0f\n", __half2float(reinterpret_cast<half *>(&b_ptr[outer * (n/2) + inner])[0]), __half2float(reinterpret_cast<half *>(&b_ptr[outer * (n/2) + inner])[1]));
+        //     printf("C1: %5.0f %5.0f\n", __half2float(reinterpret_cast<half *>(&b_ptr[(outer + 8) * (n/2) + inner])[0]), __half2float(reinterpret_cast<half *>(&b_ptr[(outer + 8) * (n/2) + inner])[1]));
+        // }
+
+        #pragma unroll
+        for (int kMMA = 0; kMMA < _TileK / MMA_K; kMMA++)
+        {
+
+            asm volatile(
+                "mma.sync.aligned.m16n8k8.row.col.f16.f16.f16.f16 "
+                "{ %0, %1}, "
+                "{ %2, %3}, "
+                "{ %4}, "
+                "{ %5, %6}; "
+                : "=r"(RD[0]), "=r"(RD[1])
+                : "r"(a_ptr[outer * (k / 2) + inner + kMMA * (MMA_K / 2)]), "r"(a_ptr[(outer + 8) * (k / 2) + inner + kMMA * (MMA_K / 2)]),
+                  "r"(b_ptr[outer * (k / 2) + inner + kMMA * (MMA_K / 2)]),
+                  "r"(RD[0]), "r"(RD[1]));
+        }
+    }
+    c_ptr[outer * (n/2) + inner] = RD[0];
+    c_ptr[(outer + 8) * (n/2) + inner] = RD[1];
+}
 
 template <class T>
 void cuBLASgemm(int m, int n, int k, const T *A, const T *B, T *C, Timeit &t)
@@ -609,6 +673,15 @@ void row2col(const dtype *a, int rows, int cols, dtype *b)
     }
 }
 
+void fill_matrix(dtype *a, int rows, int cols, dtype val)
+{
+    int size = rows * cols;
+    for (int i = 0; i < size; i++)
+    {
+        a[i] = val;
+    }
+}
+
 int main() {
     srand(1111);
     dtype *h_a, *h_b, *h_c;
@@ -625,7 +698,7 @@ int main() {
 
     gen_rand_data<dtype>(h_a, M * K);
     gen_rand_data<dtype>(h_b, K * N);
-
+    fill_matrix(h_c, M, N, 0);
     cudaMemcpy(d_a, h_a, M * K * sizeof(dtype), cudaMemcpyHostToDevice);
     cudaMemcpy(d_b, h_b, K * N * sizeof(dtype), cudaMemcpyHostToDevice);
     Timeit t = Timeit();
@@ -654,6 +727,8 @@ int main() {
         // 支持任意形状 M,N,K 及 TileM,TileN,TileK
         dim3 grid(KTileM, KTileN);
         dim3 block(TileM, TileN);
+        fill_matrix(h_c, M, N, 0);
+        CHECK(cudaMemcpy(d_c, h_c, M * N * sizeof(dtype), cudaMemcpyHostToDevice));
         t.start();
         gmem_kernel<dtype, TileM, TileN, TileK, KTileM, KTileN, KTileK><<<grid, block>>>(d_a, d_b, d_c, M, N, K);
         t.stop();
@@ -681,6 +756,8 @@ int main() {
         // 支持任意形状 M,N,K 及 TileM,TileN,TileK
         dim3 grid(KTileM, KTileN);
         dim3 block(TileM, TileN);
+        fill_matrix(h_c, M, N, 0);
+        CHECK(cudaMemcpy(d_c, h_c, M * N * sizeof(dtype), cudaMemcpyHostToDevice));
         t.start();
         tile_smem_kernel<dtype, TileM, TileN, TileK, KTileM, KTileN, KTileK><<<grid, block>>>(d_a, d_b, d_c, M, N, K);
         t.stop();
@@ -708,6 +785,8 @@ int main() {
         // 支持任意形状 M,N,K 及 TileM,TileN,TileK
         dim3 grid(KTileM, KTileN);
         dim3 block(TileM, TileN);
+        fill_matrix(h_c, M, N, 0);
+        CHECK(cudaMemcpy(d_c, h_c, M * N * sizeof(dtype), cudaMemcpyHostToDevice));
         t.start();
         tile_smem_float4_kernel<dtype, TileM, TileN, TileK, KTileM, KTileN, KTileK><<<grid, block>>>(d_a, d_b, d_c, M, N, K);
         t.stop();
@@ -737,6 +816,8 @@ int main() {
         assert(TileN % REGN == 0);
         dim3 grid(KTileM, KTileN);
         dim3 block(TileM/REGM, TileN/REGN);
+        fill_matrix(h_c, M, N, 0);
+        CHECK(cudaMemcpy(d_c, h_c, M * N * sizeof(dtype), cudaMemcpyHostToDevice));
         t.start();
         tile_smem_float4_tile_reg_kernel<dtype, TileM, TileN, TileK, KTileM, KTileN, KTileK, REGM, REGN><<<grid, block>>>(d_a, d_b, d_c, M, N, K);
         t.stop();
@@ -766,6 +847,8 @@ int main() {
         assert(TileN % REGN == 0);
         dim3 grid(KTileM, KTileN);
         dim3 block(TileM/REGM, TileN/REGN);
+        fill_matrix(h_c, M, N, 0);
+        CHECK(cudaMemcpy(d_c, h_c, M * N * sizeof(dtype), cudaMemcpyHostToDevice));
         t.start();
         tile_smem_float4_tile_reg_BT_kernel<dtype, TileM, TileN, TileK, KTileM, KTileN, KTileK, REGM, REGN><<<grid, block>>>(d_a, d_b, d_c, M, N, K);
         t.stop();
@@ -791,15 +874,52 @@ int main() {
         cudaMalloc((void**)&d_b_col_major, K * N * sizeof(dtype));
         row2col(h_b, K, N, h_b_col_major);        
         cudaMemcpy(d_b_col_major, h_b_col_major, K * N * sizeof(dtype), cudaMemcpyHostToDevice);
-        // 支持任意形状 M,N,K 及 TileM,TileN,TileK
         dim3 grid(div_ceil(M, WMMA_M), div_ceil(N, WMMA_N));
         dim3 block(WARP_SIZE);
+        fill_matrix(h_c, M, N, 0);
+        CHECK(cudaMemcpy(d_c, h_c, M * N * sizeof(dtype), cudaMemcpyHostToDevice));
         t.start();
         wmma_naive<half, WMMA_M, WMMA_N, WMMA_K><<<grid, block>>>(d_a, d_b_col_major, d_c, M, N, K);
         t.stop();
         CHECK(cudaGetLastError());
         CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(dtype), cudaMemcpyDeviceToHost));
         check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "wmma_naive");
+        printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
+        printf("time: %f ms\n", t.elapsed_time);
+        printf("throughput: %f TFLOPS(%.2f%%)\n", t.get_FLOPS() * 1e-12, t.get_FLOPS() / cublas_FLOPS * 100);
+    }catch (const std::exception& e) {
+        std::cerr << "Caught an exception: " << e.what() << std::endl;
+    }
+    print_centered("mma_naive", 100, '=');
+    try{
+        constexpr int TileM = 32;
+        constexpr int TileN = 32;
+        constexpr int TileK = 16;
+
+
+        constexpr int MMA_M = 16;
+        constexpr int MMA_N = 8;
+        constexpr int MMA_K = 8;
+        constexpr int WARP_SIZE = 32;
+        assert(N% TileN == 0);
+        assert(K % TileK == 0);
+        assert(M % TileM == 0);
+        dtype *h_b_col_major;
+        dtype *d_b_col_major;
+        h_b_col_major = (dtype*)malloc(K * N * sizeof(dtype));
+        cudaMalloc((void**)&d_b_col_major, K * N * sizeof(dtype));
+        row2col(h_b, K, N, h_b_col_major);        
+        cudaMemcpy(d_b_col_major, h_b_col_major, K * N * sizeof(dtype), cudaMemcpyHostToDevice);
+        dim3 grid(M / TileM, N / TileN);
+        dim3 block(WARP_SIZE * (TileM / MMA_M) * (TileN / MMA_N));
+        fill_matrix(h_c, M, N, 0);
+        CHECK(cudaMemcpy(d_c, h_c, M * N * sizeof(dtype), cudaMemcpyHostToDevice));
+        t.start();
+        mma_naive<half, TileM, TileN, TileK, MMA_M, MMA_N, MMA_K><<<grid, block>>>(d_a, d_b_col_major, d_c, M, N, K);
+        t.stop();
+        CHECK(cudaGetLastError());
+        CHECK(cudaMemcpy(h_c, d_c, M * N * sizeof(dtype), cudaMemcpyDeviceToHost));
+        check<(M * N + 127) / 128, 128>(h_c, ground_truth, M * N, "mma_naive");
         printf("config: grid(%d x %d), block(%d x %d)\n", grid.x, grid.y, block.x, block.y);
         printf("time: %f ms\n", t.elapsed_time);
         printf("throughput: %f TFLOPS(%.2f%%)\n", t.get_FLOPS() * 1e-12, t.get_FLOPS() / cublas_FLOPS * 100);
